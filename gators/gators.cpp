@@ -18,6 +18,12 @@ template<typename T>
 using gator_ptr = shared_ptr<gator<T>>;
 
 template<typename T>
+gator_ptr<T> fuck(gator_ptr<T> p)
+{
+    return p;
+}
+
+template<typename T>
 struct gator_root
     : gator<T>
 {
@@ -26,6 +32,13 @@ struct gator_root
 
 template<typename T>
 using gator_root_ptr = shared_ptr<gator_root<T>>;
+
+template<typename T>
+gator_ptr<T> fuck(gator_root_ptr<T> p)
+{
+    return p;
+}
+
 
 template<typename T>
 struct gator_root_impl
@@ -56,10 +69,11 @@ private:
     T value_;
 };
 
-template<typename T>
-gator_root_ptr<T> create_gator_root(T const &val)
+
+template<typename T, typename... Args>
+gator_root_ptr<T> create_gator_root(Args &&... args)
 {
-    return make_shared<gator_root_impl<T>>(val);
+    return make_shared<gator_root_impl<T>>(std::forward<Args>(args)...);
 }
 
 
@@ -155,81 +169,79 @@ private:
 template<typename Dst, typename Conv, typename... Srcs>
 gator_link_ptr<Dst> create_gator_link(Conv const &conv, gator_ptr<Srcs>... source)
 {
-    //std::function<Dst(Srcs...)> f = conv;
-    //return make_shared<gator_link_impl<Dst, Srcs...>>(f, source...);
-    return nullptr;
+    std::function<Dst(Srcs...)> f = conv;
+    return make_shared<gator_link_impl<Dst, Srcs...>>(f, source...);
 }
 
-template<typename... Srcs>
-void fuck(gator_ptr<Srcs>... source)
-{}
-
 template<typename T>
-struct foo
+struct gator_baby_impl
+    : gator<T>
 {
+    typedef gator_link_ptr<T> link_ptr;
     
+    template<typename Conv, typename... SrcGators>
+    explicit gator_baby_impl(Conv const &conv, SrcGators &&... source)
+        : link_(create_gator_link<T>(conv, fuck(std::forward<SrcGators>(source))...))
+        , value_(link_->calculate_value())
+        , conn_(link_->subscribe_value_changed(BIND_MEM(on_link_value_changed)))
+    {
+        
+    }
+
+    T const& value() const override
+    {
+        return value_;
+    }
+
+private:
+    void on_link_value_changed()
+    {
+        value_ = link_->calculate_value();
+        value_changed_signal_();
+    }
+
+private:
+    link_ptr link_;
+    T value_;
+    scoped_connection conn_;
 };
 
-template<typename T>
-struct bar
-    : foo<T>
-{
-    
-};
 
-template<typename T>
-struct baz
-    : bar<T>
+template<typename T, typename Conv, typename... SrcGators>
+gator_ptr<T> create_gator_baby(Conv const &conv, SrcGators &&... src_gators)
 {
-    
-};
-
-template<typename... Srcs>
-void aaaa(shared_ptr<foo<Srcs>>... args)
-{
-    
+    return make_shared<gator_baby_impl<T>>(conv, std::forward<SrcGators>(src_gators)...);
 }
+
 
 int main()
 {
-    auto b1 = make_shared<baz<string>>();
-    auto b2 = make_shared<baz<int>>();
+    auto a = create_gator_root<string>("Hello");
+    auto b = create_gator_root<int>(4);
 
-    aaaa(b1, b2);
-}
-
-int main1()
-{
-    auto root = make_shared<gator_root_impl<string>>();
-
-
-    scoped_connection conn = root->subscribe_value_changed([root]()
+    auto c = create_gator_baby<int>([](string const &s, int i)
     {
-        cout << "Value changed: " << root->value() << endl;
+        return int(s.length()) * i;
+    }, a, b);
+
+    auto d = create_gator_baby<string>([](int n)
+    {
+        std::stringstream ss;
+        for (size_t i = 0; i < n; ++i)
+            ss << "A";
+
+        return ss.str();
+    }, c);
+
+    auto conn = d->subscribe_value_changed([d]()
+    {
+        cout << "New value: " << d->value() << endl;
     });
 
-    root->set_value("Hello!");
+    cout << d->value() << endl;
 
-    auto root2 = create_gator_root(7);
-
-
-    auto conv = [](string const &str, int mult) 
-    {
-        return int(str.length()) * mult;
-    };
-
-    gator_ptr<string> r1(root);
-    gator_ptr<int> r2(root2);
-    
-    auto link = create_gator_link<int>(conv, r1, r2);
-    fuck(root, root2);
-
-    scoped_connection link_conn = link->subscribe_value_changed([link]()
-    {
-        cout << "Multiplied value: " << link->calculate_value() << endl;
-    });
-
-    root->set_value("aa");
+    b->set_value(2);
+    a->set_value("Hi!");
 
     return 0;
 }
